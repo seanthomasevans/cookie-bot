@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { generateStencilImage, suggestDesigns, editStencilImage } from './services/geminiService';
 import Viewer3D from './components/Viewer3D';
-import { CutterSettings, DesignAsset, ChatMessage } from './types';
-import { Loader2, Download, Wand2, Upload, AlertCircle, Plus, Image as ImageIcon, Trash2, Box, Square, Circle, Hexagon, Type as TypeIcon, User as UserIcon, Paperclip, X, Lock, ImagePlus, MessageSquare, Send, Bot } from 'lucide-react';
+import { CutterSettings, DesignAsset, ChatMessage, DesignVersion } from './types';
+import { Loader2, Download, Wand2, Upload, AlertCircle, Plus, Image as ImageIcon, Trash2, Box, Square, Circle, Hexagon, Type as TypeIcon, User as UserIcon, Paperclip, X, Lock, ImagePlus, MessageSquare, Send, Bot, History, RotateCcw, Copy, Check, Calendar, Star, ChevronDown, ChevronUp } from 'lucide-react';
 
 const App: React.FC = () => {
   const [hasApiKey, setHasApiKey] = useState(false);
@@ -20,10 +20,11 @@ const App: React.FC = () => {
   const [isEditing, setIsEditing] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
-  // Updated Defaults based on user feedback:
-  // - Detail Height: 3.5mm
-  // - Frame Thickness: 2.0mm (Thicker edge)
-  // - Frame Height: 8.0mm (Lower edge)
+  // History Modal State
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [copiedPromptId, setCopiedPromptId] = useState<string | null>(null);
+  const [expandedVersionId, setExpandedVersionId] = useState<string | null>(null);
+
   const [settings, setSettings] = useState<CutterSettings>({
     width: 90,           
     height: 90,
@@ -33,8 +34,8 @@ const App: React.FC = () => {
     threshold: 160, 
     smoothing: 0,
     shape: 'outline', 
-    frameThickness: 2.0, // Thicker default
-    frameHeight: 8.0, // Lower default
+    frameThickness: 2.0,
+    frameHeight: 8.0, 
   });
 
   const [exportTrigger, setExportTrigger] = useState(0);
@@ -66,12 +67,10 @@ const App: React.FC = () => {
     try {
       if ((window as any).aistudio) {
         await (window as any).aistudio.openSelectKey();
-        // Assume success if it resolves
         setHasApiKey(true);
       }
     } catch (e) {
       console.error("Key selection failed", e);
-      // Reset to force retry if needed
       setHasApiKey(false);
     }
   };
@@ -80,19 +79,58 @@ const App: React.FC = () => {
     setDesigns(prev => prev.map(d => d.id === id ? { ...d, ...updates } : d));
   };
 
+  const addVersion = (design: DesignAsset, imageUrl: string, prompt: string): DesignAsset => {
+    const newVersion: DesignVersion = {
+        id: crypto.randomUUID(),
+        imageUrl,
+        prompt,
+        timestamp: Date.now(),
+        isStarred: false
+    };
+    return {
+        ...design,
+        imageUrl,
+        versions: [newVersion, ...design.versions] // Prepend (newest first)
+    };
+  };
+
+  const handleRestoreVersion = (designId: string, version: DesignVersion) => {
+      updateDesign(designId, { imageUrl: version.imageUrl });
+      // We keep the versions list as is, just updating the current display URL
+  };
+
+  const toggleStarVersion = (designId: string, versionId: string) => {
+      setDesigns(prev => prev.map(d => {
+          if (d.id !== designId) return d;
+          return {
+              ...d,
+              versions: d.versions.map(v => 
+                  v.id === versionId ? { ...v, isStarred: !v.isStarred } : v
+              )
+          };
+      }));
+  };
+
+  const handleCopyPrompt = (id: string, text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedPromptId(id);
+    setTimeout(() => setCopiedPromptId(null), 2000);
+  };
+
   const handlePlanDesigns = async () => {
     if (!themeInput) return;
     setIsPlanning(true);
     try {
       const suggestions = await suggestDesigns(themeInput);
-      const newDesigns: DesignAsset[] = suggestions.map((s, i) => ({
+      const newDesigns: DesignAsset[] = suggestions.map((s) => ({
         id: crypto.randomUUID(),
         title: s.title,
         visualPrompt: s.visualPrompt,
         category: s.category,
         imageUrl: null,
         status: 'idle',
-        chatHistory: []
+        chatHistory: [],
+        versions: []
       }));
       setDesigns(newDesigns);
       if (newDesigns.length > 0) {
@@ -107,7 +145,8 @@ const App: React.FC = () => {
         category: 'portrait',
         imageUrl: null,
         status: 'idle',
-        chatHistory: []
+        chatHistory: [],
+        versions: []
       };
       setDesigns([fallback]);
       setSelectedDesignId(fallback.id);
@@ -128,9 +167,10 @@ const App: React.FC = () => {
           visualPrompt: "Stencil line art based on this image",
           category: 'portrait',
           imageUrl: null,
-          referenceImage: result, // Set as reference!
+          referenceImage: result, 
           status: 'idle',
-          chatHistory: []
+          chatHistory: [],
+          versions: []
         };
         setDesigns(prev => [...prev, newAsset]);
         setSelectedDesignId(newAsset.id);
@@ -152,9 +192,12 @@ const App: React.FC = () => {
         design.category,
         settings.width, 
         settings.height,
-        design.referenceImage // Pass the reference image if it exists
+        design.referenceImage 
       );
-      updateDesign(id, { imageUrl: url, status: 'done' });
+      
+      const updatedDesign = addVersion(design, url, design.visualPrompt);
+      updateDesign(id, { ...updatedDesign, status: 'done' });
+      
     } catch (e) {
       updateDesign(id, { status: 'error', errorMessage: 'Failed to generate' });
     }
@@ -165,14 +208,23 @@ const App: React.FC = () => {
     if (file) {
       const reader = new FileReader();
       reader.onload = (event) => {
+        const url = event.target?.result as string;
+        const initialVersion: DesignVersion = {
+            id: crypto.randomUUID(),
+            imageUrl: url,
+            prompt: 'User Uploaded',
+            timestamp: Date.now(),
+            isStarred: false
+        };
         const newAsset: DesignAsset = {
           id: crypto.randomUUID(),
           title: file.name.split('.')[0],
           visualPrompt: 'User uploaded',
-          category: 'portrait', // Default to portrait for uploads
-          imageUrl: event.target?.result as string,
+          category: 'portrait',
+          imageUrl: url,
           status: 'done',
-          chatHistory: []
+          chatHistory: [],
+          versions: [initialVersion]
         };
         setDesigns(prev => [...prev, newAsset]);
         setSelectedDesignId(newAsset.id);
@@ -232,7 +284,6 @@ const App: React.FC = () => {
         timestamp: Date.now()
     };
 
-    // Optimistic update
     updateDesign(selectedDesignId, {
         chatHistory: [...design.chatHistory, userMsg]
     });
@@ -249,8 +300,10 @@ const App: React.FC = () => {
             timestamp: Date.now()
         };
 
+        const updatedDesign = addVersion(design, newImageUrl, userMsg.text);
+
         updateDesign(selectedDesignId, {
-            imageUrl: newImageUrl,
+            ...updatedDesign,
             chatHistory: [...design.chatHistory, userMsg, aiMsg]
         });
     } catch (e) {
@@ -297,7 +350,150 @@ const App: React.FC = () => {
   const showChat = selectedDesign?.imageUrl && isChatOpen;
 
   return (
-    <div className="flex h-screen w-full bg-gray-950 text-gray-100 font-sans">
+    <div className="flex h-screen w-full bg-gray-950 text-gray-100 font-sans relative">
+      
+      {/* History Modal */}
+      {showHistoryModal && selectedDesign && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-6">
+            <div className="bg-gray-900 border border-gray-800 rounded-2xl w-full max-w-5xl h-full max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+                <div className="p-6 border-b border-gray-800 flex items-center justify-between bg-gray-900/50">
+                    <div className="flex items-center gap-3">
+                        <div className="p-2 bg-orange-600/10 rounded-lg">
+                            <History className="w-6 h-6 text-orange-500" />
+                        </div>
+                        <div>
+                            <h2 className="text-xl font-bold text-gray-100">{selectedDesign.title}</h2>
+                            <p className="text-xs text-gray-500 flex items-center gap-2">
+                                <span>{selectedDesign.versions.length} versions</span>
+                                <span className="w-1 h-1 bg-gray-600 rounded-full" />
+                                <span>{selectedDesign.versions.filter(v => v.isStarred).length} starred</span>
+                            </p>
+                        </div>
+                    </div>
+                    <button onClick={() => setShowHistoryModal(false)} className="p-2 hover:bg-gray-800 rounded-lg text-gray-400 hover:text-white transition-colors">
+                        <X className="w-6 h-6" />
+                    </button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto custom-scrollbar p-6 bg-gray-950/30">
+                    <div className="space-y-8">
+                        
+                        {/* Current Active State Info */}
+                        <div className="bg-gray-800/40 rounded-xl p-4 border border-gray-800">
+                           <div className="flex items-center gap-2 mb-2">
+                              <Wand2 className="w-4 h-4 text-purple-400" />
+                              <h3 className="text-sm font-semibold text-gray-200">Initial Concept</h3>
+                           </div>
+                           <div className="relative group">
+                             <div className="bg-black/30 p-3 rounded-lg text-gray-300 text-sm font-mono leading-relaxed border border-gray-700/30">
+                                {selectedDesign.visualPrompt}
+                             </div>
+                             <button 
+                                onClick={() => handleCopyPrompt('base', selectedDesign.visualPrompt)}
+                                className="absolute top-2 right-2 p-1.5 bg-gray-700 hover:bg-gray-600 text-white rounded-md opacity-0 group-hover:opacity-100 transition-all"
+                                title="Copy Prompt"
+                             >
+                                {copiedPromptId === 'base' ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />}
+                             </button>
+                           </div>
+                        </div>
+
+                        {/* Versions Grid */}
+                        <div>
+                             <h3 className="text-sm font-semibold text-gray-400 mb-4 flex items-center gap-2">
+                                <Calendar className="w-4 h-4" /> Generation Timeline
+                             </h3>
+                             {selectedDesign.versions.length === 0 ? (
+                                 <div className="text-center py-12 text-gray-500 border border-gray-800 border-dashed rounded-xl">
+                                     <History className="w-8 h-8 mx-auto mb-2 opacity-20" />
+                                     <p>No history yet. Generate or edit the design to create versions.</p>
+                                 </div>
+                             ) : (
+                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                                    {selectedDesign.versions.map((version, index) => {
+                                        const isActive = selectedDesign.imageUrl === version.imageUrl;
+                                        const isExpanded = expandedVersionId === version.id;
+
+                                        return (
+                                            <div key={version.id} className={`group relative bg-gray-800 rounded-xl border overflow-hidden transition-all flex flex-col ${isActive ? 'border-orange-500 ring-1 ring-orange-500/20' : 'border-gray-700 hover:border-gray-600'}`}>
+                                                {/* Header / Image Area */}
+                                                <div className="aspect-square bg-gray-900 relative border-b border-gray-800">
+                                                    <img src={version.imageUrl} alt="Version" className="w-full h-full object-contain p-4" />
+                                                    
+                                                    {/* Badges */}
+                                                    <div className="absolute top-2 left-2 flex flex-col gap-1 items-start">
+                                                        {isActive && (
+                                                            <div className="bg-orange-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow-lg uppercase tracking-wider flex items-center gap-1">
+                                                                <Check className="w-3 h-3" /> Active
+                                                            </div>
+                                                        )}
+                                                        {version.isStarred && (
+                                                            <div className="bg-yellow-500 text-black text-[10px] font-bold px-2 py-0.5 rounded-full shadow-lg flex items-center gap-1">
+                                                                <Star className="w-3 h-3 fill-current" /> Favorite
+                                                            </div>
+                                                        )}
+                                                    </div>
+
+                                                    {/* Star Action */}
+                                                    <button 
+                                                        onClick={(e) => { e.stopPropagation(); toggleStarVersion(selectedDesign.id, version.id); }}
+                                                        className={`absolute top-2 right-2 p-2 rounded-full shadow-lg transition-all transform hover:scale-110 ${version.isStarred ? 'bg-yellow-500 text-black' : 'bg-gray-800 text-gray-400 hover:text-yellow-400 border border-gray-700'}`}
+                                                        title={version.isStarred ? "Unstar" : "Mark as Favorite"}
+                                                    >
+                                                        <Star className={`w-4 h-4 ${version.isStarred ? 'fill-current' : ''}`} />
+                                                    </button>
+                                                </div>
+                                                
+                                                {/* Details Area */}
+                                                <div className="p-3 flex-1 flex flex-col">
+                                                    <div className="flex items-center justify-between mb-2">
+                                                        <span className="text-[10px] text-gray-500 uppercase font-semibold">
+                                                            {new Date(version.timestamp).toLocaleTimeString()} · {new Date(version.timestamp).toLocaleDateString()}
+                                                        </span>
+                                                        <span className="text-[10px] bg-gray-700/50 px-1.5 py-0.5 rounded text-gray-400">
+                                                            v{selectedDesign.versions.length - index}
+                                                        </span>
+                                                    </div>
+
+                                                    <div className="relative mb-3 flex-1">
+                                                        <p className={`text-xs text-gray-300 font-mono ${isExpanded ? '' : 'line-clamp-2'}`}>
+                                                            {index === selectedDesign.versions.length - 1 ? "Initial Generation" : `Edit: "${version.prompt}"`}
+                                                        </p>
+                                                        {(version.prompt.length > 50 || index !== selectedDesign.versions.length - 1) && (
+                                                            <button 
+                                                                onClick={() => setExpandedVersionId(isExpanded ? null : version.id)}
+                                                                className="mt-1 flex items-center gap-1 text-[10px] text-blue-400 hover:text-blue-300"
+                                                            >
+                                                                {isExpanded ? <><ChevronUp className="w-3 h-3" /> Less</> : <><ChevronDown className="w-3 h-3" /> Full Prompt</>}
+                                                            </button>
+                                                        )}
+                                                    </div>
+
+                                                    {!isActive ? (
+                                                        <button 
+                                                            onClick={() => handleRestoreVersion(selectedDesign.id, version)}
+                                                            className="w-full bg-gray-700 hover:bg-orange-600 hover:text-white text-gray-300 text-xs py-2 rounded-lg transition-all flex items-center justify-center gap-1.5 font-medium border border-gray-600 hover:border-orange-500"
+                                                        >
+                                                            <RotateCcw className="w-3 h-3" /> Restore this Version
+                                                        </button>
+                                                    ) : (
+                                                        <div className="w-full bg-orange-600/10 border border-orange-500/30 text-orange-400 text-xs py-2 rounded-lg text-center font-medium">
+                                                            Current Version
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                             )}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+      )}
+
       {/* Left Sidebar - Controls */}
       <div className="w-96 flex flex-col border-r border-gray-800 bg-gray-900/50 backdrop-blur-sm h-full overflow-hidden shrink-0">
         <div className="p-6 border-b border-gray-800 shrink-0">
@@ -406,6 +602,19 @@ const App: React.FC = () => {
                       </div>
 
                       <div className="flex items-center gap-1">
+                          {/* History Button - ALWAYS VISIBLE NOW */}
+                           <button
+                              onClick={(e) => { e.stopPropagation(); setSelectedDesignId(design.id); setShowHistoryModal(true); }}
+                              className={`p-2 rounded-lg transition-colors ${
+                                  design.versions.length > 0 
+                                  ? 'bg-gray-700/50 hover:bg-gray-700 text-gray-400 hover:text-white'
+                                  : 'bg-transparent text-gray-600 hover:bg-gray-800 hover:text-gray-400'
+                              }`}
+                              title="View History & Prompts"
+                           >
+                               <History className="w-4 h-4" />
+                           </button>
+
                           {/* Reference Upload Button */}
                           {(design.status === 'idle' || design.status === 'error') && (
                               <>
@@ -647,14 +856,34 @@ const App: React.FC = () => {
               <p className="text-sm text-gray-700 mt-2 max-w-xs mx-auto">
                 Set your Shape & Size on the left, then click Generate.
               </p>
+              {selectedDesign && (
+                   <button 
+                      onClick={() => setShowHistoryModal(true)}
+                      className="mt-4 px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-sm border border-gray-700 transition-colors flex items-center gap-2 mx-auto"
+                   >
+                       <History className="w-4 h-4 text-orange-500" /> View History & Prompts
+                   </button>
+              )}
             </div>
           </div>
         )}
         
+        {/* Source Image Overlay & Actions */}
         {selectedDesign?.imageUrl && (
-            <div className="absolute top-6 left-6 w-64 h-64 bg-gray-800 rounded-lg border-2 border-gray-700 overflow-hidden shadow-xl pointer-events-none z-20">
-                <img src={selectedDesign.imageUrl} alt="Source" className="w-full h-full object-cover opacity-80" />
-                <div className="absolute bottom-0 inset-x-0 bg-black/60 text-xs text-center py-1 text-white">2D Line Art</div>
+            <div className="absolute top-6 left-6 flex items-start gap-4 z-20">
+                <div className="w-64 h-64 bg-gray-800 rounded-lg border-2 border-gray-700 overflow-hidden shadow-xl pointer-events-none">
+                    <img src={selectedDesign.imageUrl} alt="Source" className="w-full h-full object-cover opacity-80" />
+                    <div className="absolute bottom-0 inset-x-0 bg-black/60 text-xs text-center py-1 text-white">2D Line Art</div>
+                </div>
+                
+                <button 
+                  onClick={() => setShowHistoryModal(true)}
+                  className="bg-gray-800/90 backdrop-blur hover:bg-gray-700 border border-gray-600 text-white p-2.5 rounded-lg shadow-lg transition-colors group flex flex-col items-center gap-1"
+                  title="View History & Versions"
+                >
+                   <History className="w-5 h-5 text-orange-500" />
+                   <span className="text-[10px] text-gray-300">History</span>
+                </button>
             </div>
         )}
 
@@ -677,12 +906,21 @@ const App: React.FC = () => {
               <Bot className="w-4 h-4 text-orange-500" />
               AI Editor
             </h3>
-            <button 
-              onClick={() => setIsChatOpen(false)}
-              className="p-1 rounded hover:bg-gray-800 text-gray-400"
-            >
-              <X className="w-4 h-4" />
-            </button>
+            <div className="flex items-center gap-1">
+                 <button 
+                    onClick={() => setShowHistoryModal(true)}
+                    className="p-1 rounded hover:bg-gray-800 text-gray-400 hover:text-white"
+                    title="View Generation History"
+                 >
+                    <History className="w-4 h-4" />
+                 </button>
+                <button 
+                  onClick={() => setIsChatOpen(false)}
+                  className="p-1 rounded hover:bg-gray-800 text-gray-400"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+            </div>
           </div>
 
           <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">

@@ -4,7 +4,7 @@ import { OrbitControls, Center, Environment, Grid } from '@react-three/drei';
 import * as THREE from 'three';
 import { STLExporter } from 'three/examples/jsm/exporters/STLExporter';
 import { CutterSettings } from '../types';
-import { createStampGeometry, createCutterFrame, createBasePlate, generateSilhouetteShape } from '../utils/meshGenerator';
+import { createStampGeometry, createCutterFrame, createBasePlate, generateSilhouetteShape, flipGeometryY } from '../utils/meshGenerator';
 import { Box, Layers, RefreshCw, Grid3x3, Eye } from 'lucide-react';
 
 // Workaround for missing IntrinsicElements types in some environments
@@ -83,8 +83,9 @@ function SceneContent({ imageSrc, settings, exportTrigger, onExportComplete, sho
            if (silhouetteShape) {
              frameGeo = createCutterFrame(settings, silhouetteShape);
              baseGeo = createBasePlate(settings, silhouetteShape);
-             frameGeo.scale(1, -1, 1);
-             baseGeo.scale(1, -1, 1);
+             flipGeometryY(frameGeo);
+             flipGeometryY(baseGeo);
+             
              frameGeo.computeBoundingBox();
              const frameW = frameGeo.boundingBox!.max.x - frameGeo.boundingBox!.min.x;
              if (frameW > 0) finalGroupScale = settings.width / frameW;

@@ -30,6 +30,39 @@ const loadImage = (src: string): Promise<HTMLImageElement> => {
 };
 
 /**
+ * Flips the geometry along Y axis (mirror) and fixes the face winding order
+ * so that normals point correctly outwards.
+ */
+export const flipGeometryY = (geometry: THREE.BufferGeometry) => {
+    geometry.scale(1, -1, 1);
+    
+    const index = geometry.index;
+    if (index) {
+        for (let i = 0; i < index.count; i += 3) {
+             const a = index.getX(i);
+             const c = index.getX(i + 2);
+             index.setX(i, c);
+             index.setX(i + 2, a);
+        }
+    } else {
+        const pos = geometry.attributes.position;
+        for (let i = 0; i < pos.count; i += 3) {
+             const x1 = pos.getX(i);
+             const y1 = pos.getY(i);
+             const z1 = pos.getZ(i);
+             
+             const x3 = pos.getX(i + 2);
+             const y3 = pos.getY(i + 2);
+             const z3 = pos.getZ(i + 2);
+             
+             pos.setXYZ(i, x3, y3, z3);
+             pos.setXYZ(i+2, x1, y1, z1);
+        }
+    }
+    geometry.computeVertexNormals();
+};
+
+/**
  * Generates a "Die-Cut Sticker" style outline.
  * 
  * Algorithm:
@@ -287,6 +320,6 @@ export const createStampGeometry = async (imageSrc: string, settings: CutterSett
         steps: 1
     });
 
-    geometry.scale(1, -1, 1);
+    flipGeometryY(geometry);
     return geometry;
 };

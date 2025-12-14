@@ -20,6 +20,14 @@ export interface ChatMessage {
   timestamp: number;
 }
 
+export interface DesignVersion {
+  id: string;
+  imageUrl: string;
+  prompt: string;
+  timestamp: number;
+  isStarred?: boolean;
+}
+
 export interface DesignAsset {
   id: string;
   title: string;
@@ -30,4 +38,5 @@ export interface DesignAsset {
   status: 'idle' | 'generating' | 'done' | 'error';
   errorMessage?: string;
   chatHistory: ChatMessage[];
+  versions: DesignVersion[];
 }
