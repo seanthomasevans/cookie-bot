@@ -1,0 +1,5 @@
+{
+  "name": "CookieBot",
+  "description": "A workflow to generate 3D printable cookie cutters and stamps from text prompts or images using Gemini.",
+  "requestFramePermissions": []
+}
